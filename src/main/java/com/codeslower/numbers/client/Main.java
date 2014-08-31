@@ -1,20 +1,153 @@
 package com.codeslower.numbers.client;
 
+import com.google.common.base.Preconditions;
+import com.google.common.util.concurrent.RateLimiter;
+import org.apache.commons.cli.*;
+
 import java.io.IOException;
 import java.io.OutputStreamWriter;
 import java.net.Socket;
+import java.net.SocketException;
 import java.util.Random;
 
 public class Main {
-    public static void main(String [] args) throws IOException {
-        Socket client = new Socket("localhost", 4000);
-        OutputStreamWriter out = new OutputStreamWriter(client.getOutputStream(), "UTF-8");
-        Random random = new Random();
-        while(true) {
-            int i = random.nextInt(1_000_000_000);
-            String num = String.format("%09d\n", i);
-            System.out.print(".");
-            out.write(num);
+
+    private static final int MAX_NUM = 1_000_000_000;
+    private static boolean quiet;
+
+    public static void main(String [] args) throws IOException, ParseException {
+        RateLimiter r = null;
+
+        Options opts = new Options();
+        opts.addOption("v","val",true, "Dependent on client.");
+        opts.addOption("q","quiet", false, "Quiet output.");
+        opts.addOption("h","help", false, "Display help.");
+        opts.addOption("b", "bad", false, "Use bad input client. val - between 0 & 1, representing percentage of time when bad input is sent");
+        opts.addOption("s", "steady", false, "Use steady client. val - rate of requests in 1000s per second.");
+        opts.addOption("r", "repeat", false, "Use repeating client. val - rate of requests in 1000s per second.");
+
+        CommandLine cmds = new BasicParser().parse(opts, args);
+        quiet = cmds.hasOption("quiet");
+
+        if(cmds.hasOption("help")) {
+            HelpFormatter formatter = new HelpFormatter();
+            formatter.printHelp(Main.class.getCanonicalName(), opts);
+            return;
+        }
+
+        Client client;
+        if(cmds.hasOption("bad")) {
+            Double val = Double.parseDouble(cmds.getOptionValue("val"));
+            client = new BadInputClient(val);
+        }
+        else if(cmds.hasOption("steady")) {
+            Integer rate = Integer.parseInt(cmds.getOptionValue("val"));
+            client = new SteadyClient(rate);
+        }
+        else if(cmds.hasOption("repeat")) {
+            Integer rate = Integer.parseInt(cmds.getOptionValue("val"));
+            client = new RepeatingClient(rate);
+        }
+        else {
+            client = new SpeedClient();
+        }
+
+        client.go();
+    }
+
+    public abstract static class Client {
+        protected abstract int getNext();
+
+        public void go() throws IOException {
+            Socket socket = new Socket("localhost", 4000);
+            OutputStreamWriter out = new OutputStreamWriter(socket.getOutputStream(), "UTF-8");
+            while (true) {
+                try {
+                    if (!quiet) {
+                        System.out.print(".");
+                    }
+                    out.write(String.format("%09d\n", getNext()));
+                } catch (SocketException e) {
+                    socket = new Socket("localhost", 4000);
+                    out = new OutputStreamWriter(socket.getOutputStream(), "UTF-8");
+                    if(!quiet) {
+                        System.out.print("\n");
+                    }
+                }
+            }
+        }
+    }
+
+    public static class SpeedClient extends Client {
+        private Random random = new Random();
+
+        @Override
+        protected int getNext() {
+            return random.nextInt(MAX_NUM);
+        }
+    }
+
+    public static class SteadyClient extends Client {
+        private final RateLimiter limiter;
+        private Random random = new Random();
+
+        /**
+         *
+         * @param rate In 1000 requests / second.
+         */
+        public SteadyClient(int rate) {
+            this.limiter = RateLimiter.create(rate * 1000.0);
+        }
+
+        protected int getNext() {
+            limiter.acquire();
+            return random.nextInt(MAX_NUM);
+        }
+    }
+
+    public static class RepeatingClient extends Client {
+        private final RateLimiter limiter;
+
+        /**
+         *
+         * @param rate In 1000 requests / second.
+         */
+        public RepeatingClient(int rate) {
+            this.limiter = RateLimiter.create(rate * 1000.0);
+        }
+
+        protected int getNext() {
+            limiter.acquire();
+            return 4;
+        }
+    }
+
+    /**
+     * A client that generates bad input some percent
+     * of the time.
+     */
+    public static class BadInputClient extends Client {
+
+        private final double percent;
+        private Random random = new Random();
+
+        /**
+         *
+         * @param percent A value between 0 and 1.
+         */
+        public BadInputClient(double percent) {
+            Preconditions.checkArgument(percent >=0 && percent <= 1);
+            this.percent = percent * MAX_NUM;
+        }
+
+        @Override
+        protected int getNext() {
+            int n = random.nextInt(MAX_NUM);
+            if(n < percent) {
+                return MAX_NUM + 1;
+            }
+
+            return n;
         }
     }
 }

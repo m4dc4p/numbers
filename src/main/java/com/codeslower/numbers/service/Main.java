@@ -79,6 +79,7 @@ public class Main {
             Server server = new Server(toDeDupe, executor);
             executor.submit(new Drainer(numbers, out));
             executor.submit(new Deduper(toDeDupe, numbers, duplicateCount));
+            executor.scheduleWithFixedDelay(new Reporter(), 10, 10, TimeUnit.SECONDS);
 
             try {
                 executor.submit(server).get();
@@ -91,7 +92,7 @@ public class Main {
                 e.printStackTrace();
             }
 
-            executor.shutdown();
+            logger.info("Done");
         }
     }
 
@@ -304,13 +305,28 @@ public class Main {
         }
     }
 
+    public static class Reporter implements Runnable {
+        private int lastCount = 0;
+        private int lastDup = 0;
+
+        @Override
+        public void run() {
+            int dup = duplicateCount.get();
+            int count = receivedCount.get();
+
+            System.out.println(String.format("Saw %d duplicates, %d numbers since last time",
+                    dup - lastDup, count - lastCount));
+
+            lastDup = dup;
+            lastCount = count;
+        }
+    }
+
     public static class Drainer implements Runnable {
 
         private final BlockingQueue<String> numbers;
         private final OutputStreamWriter outputStreamWriter;
         private List<String> result;
-        private int lastCount = 0;
-        private int lastDup = 0;
 
         public Drainer(BlockingQueue<String> numbers, OutputStreamWriter outputStreamWriter) {
             this.numbers = numbers;
@@ -323,12 +339,6 @@ public class Main {
             while(true) {
                 if(numbers.size() > result.size())
                     result = new ArrayList<>(numbers.size());
-
-                int dup = duplicateCount.get();
-                int count = receivedCount.get();
-
-//                logger.info(String.format("Saw %d duplicates, %d numbers since last time",
-//                        dup - lastDup, count - lastCount));
 
                 numbers.drainTo(result);
                 if(logger.isDebugEnabled()) {
@@ -350,8 +360,6 @@ public class Main {
                 }
 
                 result.clear();
-                lastDup = dup;
-                lastCount = count;
             }
         }
     }
@@ -370,26 +378,32 @@ public class Main {
 
         @Override
         public void run() {
+            List<byte[]> result = new ArrayList<>(1000);
             while(true) {
                 try {
-                    byte[] result = source.poll(10, TimeUnit.MILLISECONDS);
-                    if(result != null) {
+                    int cnt = source.drainTo(result);
+                    if(cnt > 0) {
                         if(logger.isDebugEnabled()) {
                             logger.debug("Got some bytes.");
                         }
-                        String s = new String(result, "UTF-8");
-                        if (! seen.containsKey(s)) {
-                            seen.put(s, null);
-                            if (logger.isDebugEnabled()) {
-                                logger.debug("Got unique element.");
+                        for(byte[] b : result) {
+                            String s = new String(b, "UTF-8");
+                            if (! seen.containsKey(s)) {
+                                seen.put(s, null);
+                                if (logger.isDebugEnabled()) {
+                                    logger.debug("Got unique element.");
+                                }
+                                UNIQUE_COUNT.mark();
+                                dest.put(s);
+                                continue;
                             }
-                            UNIQUE_COUNT.mark();
-                            dest.put(s);
-                            continue;
+
+                            DUPLICATE_COUNT.mark();
+                            duplicateCount.incrementAndGet();
+
                         }
 
-                        DUPLICATE_COUNT.mark();
-                        duplicateCount.incrementAndGet();
+                        result.clear();
                     }
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
