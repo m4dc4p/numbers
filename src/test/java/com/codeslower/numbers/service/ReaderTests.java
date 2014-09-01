@@ -17,11 +17,11 @@ import static org.junit.Assert.*;
 public class ReaderTests {
     private static final Charset UTF8 = Charset.forName("UTF-8");
     private AtomicInteger receivedCount = new AtomicInteger(0);
-    private Queue<byte[]> store;
+    private BlockingQueue<byte[]> store;
 
     @Before
     public void setUp() throws Exception {
-        store = new LinkedList<>();
+        store = new LinkedBlockingQueue<>();
     }
 
     @Test(expected = Main.TerminateException.class)
