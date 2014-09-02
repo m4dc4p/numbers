@@ -77,18 +77,10 @@ public class Main {
             Socket socket = new Socket("localhost", 4000);
             OutputStreamWriter out = new OutputStreamWriter(socket.getOutputStream(), "UTF-8");
             while (true) {
-                try {
-                    if (!quiet) {
-                        System.out.print(".");
-                    }
-                    out.write(String.format("%09d\n", getNext()));
-                } catch (SocketException e) {
-                    socket = new Socket("localhost", 4000);
-                    out = new OutputStreamWriter(socket.getOutputStream(), "UTF-8");
-                    if(!quiet) {
-                        System.out.print("\n");
-                    }
+                if (!quiet) {
+                    System.out.print(".");
                 }
+                out.write(String.format("%09d\n", getNext()));
             }
         }
     }
@@ -139,7 +131,8 @@ public class Main {
 
     /**
      * A client that generates bad input some percent
-     * of the time.
+     * of the time. Always reconnects after connection
+     * is closed.
      */
     public static class BadInputClient extends Client {
 
@@ -153,6 +146,25 @@ public class Main {
         public BadInputClient(double percent) {
             Preconditions.checkArgument(percent >=0 && percent <= 1);
             this.percent = percent * MAX_NUM;
+        }
+
+        public void go() throws IOException {
+            Socket socket = new Socket("localhost", 4000);
+            OutputStreamWriter out = new OutputStreamWriter(socket.getOutputStream(), "UTF-8");
+            while (true) {
+                try {
+                    if (!quiet) {
+                        System.out.print(".");
+                    }
+                    out.write(String.format("%09d\n", getNext()));
+                } catch (SocketException e) {
+                    socket = new Socket("localhost", 4000);
+                    out = new OutputStreamWriter(socket.getOutputStream(), "UTF-8");
+                    if(!quiet) {
+                        System.out.print("\n");
+                    }
+                }
+            }
         }
 
         @Override
