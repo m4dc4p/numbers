@@ -4,14 +4,12 @@ import com.codahale.metrics.*;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-import java.io.IOException;
-import java.io.OutputStreamWriter;
-import java.io.PrintStream;
-import java.io.UnsupportedEncodingException;
+import java.io.*;
 import java.net.InetSocketAddress;
-import java.nio.ByteBuffer;
-import java.nio.ByteOrder;
-import java.nio.channels.*;
+import java.nio.channels.SelectionKey;
+import java.nio.channels.Selector;
+import java.nio.channels.ServerSocketChannel;
+import java.nio.channels.SocketChannel;
 import java.nio.charset.Charset;
 import java.nio.file.FileSystems;
 import java.nio.file.Files;
@@ -25,41 +23,36 @@ import static com.codahale.metrics.MetricRegistry.name;
 
 public class Main {
 
+    private static Logger logger = LogManager.getLogger(Main.class);
+
     private static final Charset UTF8 = Charset.forName("UTF-8");
-    private static final byte [] TERMINATE = "erminate".getBytes(UTF8);
-    private static final int MAX_CLIENTS = 10;
-    static Logger logger = LogManager.getLogger(Main.class);
-
-    static BlockingQueue<byte[]> toDeDupe;
-    static BlockingQueue<String> numbers;
-
-    static AtomicInteger duplicateCount = new AtomicInteger(0);
-    static AtomicInteger receivedCount = new AtomicInteger(0);
-    static byte Zero = (byte) '0';
-    static byte Nine = (byte) '9';
-    static byte NewLine = (byte) '\n';
-    static byte Tee = (byte) 't';
+    private static final int MAX_CLIENTS = 5;
 
     private static final MetricRegistry registry = new MetricRegistry();
-    private static final Meter RECEIVED_COUNT = registry.meter(name(Main.class, "Received"));
-    private static final Meter DUPLICATE_COUNT = registry.meter(name(Main.class, "Duplicate"));
-    private static final Meter UNIQUE_COUNT = registry.meter(name(Main.class, "Unique"));
-    private static final Meter WRITE_COUNT = registry.meter(name(Main.class, "Written"));
+    public static final Meter RECEIVED_COUNT = registry.meter(name(Main.class, "Received"));
+    public static final Meter DUPLICATE_COUNT = registry.meter(name(Main.class, "Duplicate"));
+    public static final Meter UNIQUE_COUNT = registry.meter(name(Main.class, "Unique"));
+    public static final Meter WRITE_COUNT = registry.meter(name(Main.class, "Written"));
 
-    private static final Timer DEDUPE_TIMER = registry.timer(name(Main.class, "Deduper"));
-    private static final Timer DRAIN_TIMER = registry.timer(name(Main.class, "Drainer"));
-    private static final Timer READ_TIMER = registry.timer(name(Main.class, "Reader"));
+    public static final Timer DEDUPE_TIMER = registry.timer(name(Main.class, "DeDuper"));
+    public static final Timer DRAIN_TIMER = registry.timer(name(Main.class, "Drainer"));
+    public static final Timer READ_TIMER = registry.timer(name(Main.class, "Reader"));
+
+    private static OutputStream createLog(String filename) throws IOException {
+        return Files.newOutputStream(FileSystems.getDefault().getPath(filename),
+                StandardOpenOption.CREATE,
+                StandardOpenOption.TRUNCATE_EXISTING);
+    }
 
     public static void main(String [] args) throws IOException, InterruptedException, ExecutionException {
 
-        toDeDupe = new ArrayBlockingQueue<>(1_000_000);
-        numbers = new ArrayBlockingQueue<>(1_000_000);
+        AtomicInteger duplicateCount = new AtomicInteger(0);
+        AtomicInteger receivedCount = new AtomicInteger(0);
+        BlockingQueue<byte[]> toDeDupe = new ArrayBlockingQueue<>(1_000_000);
+        BlockingQueue<Integer> numbers = new ArrayBlockingQueue<>(1_000_000);
         ScheduledExecutorService executor = Executors.newScheduledThreadPool(16);
 
-        try(PrintStream metrics = new PrintStream(Files.newOutputStream(FileSystems.getDefault().getPath("metrics.log"),
-                StandardOpenOption.CREATE,
-                StandardOpenOption.TRUNCATE_EXISTING
-        ), true, UTF8.name())) {
+        try(PrintStream metrics = new PrintStream(createLog("metrics.log"), false, "UTF-8")) {
 
             JmxReporter.forRegistry(registry).build().start();
             ConsoleReporter.forRegistry(registry)
@@ -75,31 +68,22 @@ public class Main {
                     .build()
                     .start(10, TimeUnit.SECONDS);
 
-            try (OutputStreamWriter out = new OutputStreamWriter(
-                    Files.newOutputStream(FileSystems.getDefault().getPath("numbers.log"),
-                            StandardOpenOption.CREATE,
-                            StandardOpenOption.TRUNCATE_EXISTING), UTF8)) {
+            try (OutputStreamWriter out = new OutputStreamWriter(createLog("numbers.log"), UTF8)) {
                 logger.info("Opened numbers.log");
 
-                Server server = new Server(toDeDupe, executor);
+                Server server = new Server(toDeDupe, executor, receivedCount);
                 executor.submit(new Drainer(numbers, out));
-                executor.submit(new Deduper(toDeDupe, numbers, duplicateCount));
-                executor.scheduleWithFixedDelay(new Reporter(), 10, 10, TimeUnit.SECONDS);
+                executor.submit(new DeDuper(toDeDupe, numbers, duplicateCount));
+                executor.scheduleWithFixedDelay(new Reporter(System.out, duplicateCount, receivedCount), 10, 10, TimeUnit.SECONDS);
 
-                try {
-                    executor.submit(server).get();
-                } catch (InterruptedException e) {
-                    e.printStackTrace();
-                } catch (ExecutionException e) {
-                    e.getCause().printStackTrace();
-                    e.printStackTrace();
-                }
+                executor.submit(server).get();
 
-                executor.shutdownNow();
-                logger.info("Done");
             }
+            catch (InterruptedException|ExecutionException e) { }
         }
 
+        executor.shutdownNow();
+        logger.info("Done");
         System.exit(0);
     }
 
@@ -110,15 +94,17 @@ public class Main {
     }
 
     public static class Server implements Runnable {
-        static Logger logger = LogManager.getLogger(Server.class);
+        private static Logger logger = LogManager.getLogger(Server.class);
 
         private final BlockingQueue<byte[]> dest;
         private final ScheduledExecutorService executor;
         private final List<Future> clients = new ArrayList<>(MAX_CLIENTS);
+        private AtomicInteger receivedCount;
 
-        public Server(BlockingQueue<byte[]> dest, ScheduledExecutorService executor) {
+        public Server(BlockingQueue<byte[]> dest, ScheduledExecutorService executor, AtomicInteger receivedCount) {
             this.dest = dest;
             this.executor = executor;
+            this.receivedCount = receivedCount;
         }
 
         @Override
@@ -188,157 +174,29 @@ public class Main {
         }
     }
 
-    public static class Reader implements Runnable {
-        static Logger logger = LogManager.getLogger(Reader.class);
-
-        private final ReadableByteChannel channel;
-        private final BlockingQueue<byte[]> store;
-        private final AtomicInteger receivedCount;
-
-        public Reader(ReadableByteChannel channel, BlockingQueue<byte[]> store, AtomicInteger receivedCount) {
-            this.channel = channel;
-            this.store = store;
-            this.receivedCount = receivedCount;
-        }
-
-        static class NumberReader {
-
-            private final Reader reader;
-
-            Expecting state = Expecting.START;
-            byte[] remaining = new byte[9];
-            int lastIdx = 0;
-            int staticCmdIdx = 0;
-
-            public NumberReader(Reader reader) {
-                this.reader = reader;
-            }
-
-            enum Expecting {
-                START,
-                TERMINATING,
-                NUMBER,
-                NEWLINE
-            }
-
-            public List<byte[]> readBuffer(ByteBuffer buf) {
-                List<byte[]> result = new ArrayList<>(9);
-
-                DONE:
-                for (int currIdx = 0; currIdx < buf.position(); currIdx++) {
-                    byte b = buf.get(currIdx);
-                    switch (state) {
-                        case START:
-                            remaining[lastIdx] = b;
-                            lastIdx++;
-                            if (b >= Zero && b <= Nine) {
-                                state = Expecting.NUMBER;
-                            } else if (b == Tee) {
-                                staticCmdIdx = 0;
-                                state = Expecting.TERMINATING;
-                            } else {
-                                close();
-                                break DONE;
-                            }
-                            break;
-                        case TERMINATING:
-                            if (b == TERMINATE[staticCmdIdx]) {
-                                staticCmdIdx += 1;
-                                if (staticCmdIdx == TERMINATE.length) {
-                                    logger.info("Throwing TerminateException.");
-                                    throw new TerminateException();
-                                }
-                            } else {
-                                close();
-                                break DONE;
-                            }
-                            break;
-                        case NUMBER:
-                            remaining[lastIdx] = b;
-                            lastIdx++;
-                            if (b < Zero || b > Nine) {
-                                close();
-                                break DONE;
-                            }
-
-                            if (lastIdx == 9) {
-                                result.add(remaining.clone());
-                                state = Expecting.NEWLINE;
-                                staticCmdIdx = 0;
-                                lastIdx = 0;
-                            }
-
-                            break;
-                        case NEWLINE:
-                            if (b != NewLine) {
-                                close();
-                                break DONE;
-                            }
-
-                            lastIdx = 0;
-                            state = Expecting.START;
-                            break;
-                    }
-                }
-
-                return result;
-            }
-
-            private void close() {
-                try {
-                    if(logger.isDebugEnabled()) {
-                        logger.debug("Closing client connection.");
-                    }
-                    reader.channel.close();
-                } catch (IOException e) {
-                }
-            }
-        }
-
-        @Override
-        public void run() {
-            ByteBuffer buffer = ByteBuffer.allocate(1000);
-            buffer.order(ByteOrder.nativeOrder());
-            NumberReader reader = new NumberReader(this);
-            while(true) {
-                long startTime = System.currentTimeMillis();
-                try {
-                    buffer.clear();
-                    int bytesRead = channel.read(buffer);
-                    if (bytesRead > 0) {
-                        List<byte[]> result = reader.readBuffer(buffer);
-                        if (result.size() > 0) {
-                            if (logger.isDebugEnabled()) {
-                                logger.debug(String.format("Received %d numbers", result.size()));
-                            }
-                            for(byte [] r : result) {
-                                store.put(r);
-                            }
-                            RECEIVED_COUNT.mark(result.size());
-                            receivedCount.addAndGet(result.size());
-                        }
-                    }
-
-                    READ_TIMER.update(System.currentTimeMillis() - startTime, TimeUnit.MILLISECONDS);
-                } catch (IOException e) {
-                    break;
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                }
-            }
-        }
-    }
-
+    /**
+     * On every invocation, prints the count of duplicate numbers seen (and numbers
+     * received) since the last invocation.
+     */
     public static class Reporter implements Runnable {
+        private final PrintStream out;
+        private final AtomicInteger duplicateCount;
+        private final AtomicInteger receivedCount;
         private int lastCount = 0;
         private int lastDup = 0;
+
+        public Reporter(PrintStream out, AtomicInteger duplicateCount, AtomicInteger receivedCount) {
+            this.out = out;
+            this.duplicateCount = duplicateCount;
+            this.receivedCount = receivedCount;
+        }
 
         @Override
         public void run() {
             int dup = duplicateCount.get();
             int count = receivedCount.get();
 
-            System.out.println(String.format("Saw %d duplicates, %d numbers since last time",
+            out.println(String.format("Saw %d duplicates, %d numbers since last time",
                     dup - lastDup, count - lastCount));
 
             lastDup = dup;
@@ -346,59 +204,20 @@ public class Main {
         }
     }
 
-    public static class Drainer implements Runnable {
-
-        private final BlockingQueue<String> numbers;
-        private final OutputStreamWriter outputStreamWriter;
-        private List<String> result;
-
-        public Drainer(BlockingQueue<String> numbers, OutputStreamWriter outputStreamWriter) {
-            this.numbers = numbers;
-            this.outputStreamWriter = outputStreamWriter;
-            result = new ArrayList<>(1000);
-        }
-
-        @Override
-        public void run() {
-            while(true) {
-                long startTime = System.currentTimeMillis();
-                numbers.drainTo(result, 1000);
-                if (logger.isDebugEnabled()) {
-                    logger.debug(String.format("Drained %d elements", result.size()));
-                }
-
-                try {
-                    for (String s : result) {
-                        if (logger.isDebugEnabled()) {
-                            logger.debug(String.format("Writing %s", s));
-                        }
-                        outputStreamWriter.write(s);
-                        outputStreamWriter.write("\n");
-                        WRITE_COUNT.mark();
-                    }
-
-                    outputStreamWriter.flush();
-                } catch (IOException e) {
-
-                }
-
-                result.clear();
-                DRAIN_TIMER.update(System.currentTimeMillis() - startTime, TimeUnit.MILLISECONDS);
-            }
-        }
-    }
-
-    public static class Deduper implements Runnable {
+    /**
+     * Converts bytes (representing ASCII digits) in an input queue into numbers; discards
+     * duplicate values; puts unique values into the given destination queue.
+     */
+    public static class DeDuper implements Runnable {
         private static final int MAX_NUM = 1_000_000_000;
-        private static final Logger logger = LogManager.getLogger(Deduper.class);
+        private static final Logger logger = LogManager.getLogger(DeDuper.class);
 
         private final boolean[] seen = new boolean[MAX_NUM];
         private final BlockingQueue<byte[]> source;
-        private final BlockingQueue<String> dest;
+        private final BlockingQueue<Integer> dest;
         private final AtomicInteger duplicateCount;
 
-
-        public Deduper(BlockingQueue<byte[]> source, BlockingQueue<String> dest, AtomicInteger duplicateCount) {
+        public DeDuper(BlockingQueue<byte[]> source, BlockingQueue<Integer> dest, AtomicInteger duplicateCount) {
             this.source = source;
             this.dest = dest;
             this.duplicateCount = duplicateCount;
@@ -416,15 +235,14 @@ public class Main {
                             logger.debug("Got some bytes.");
                         }
                         for(byte[] b : result) {
-                            String str = new String(b, "UTF-8");
-                            int val = Integer.parseInt(str);
+                            Integer val = Integer.parseInt(new String(b, "UTF-8"));
                             if (! seen[val]) {
                                 seen[val] = true;
                                 if (logger.isDebugEnabled()) {
                                     logger.debug("Got unique element.");
                                 }
                                 UNIQUE_COUNT.mark();
-                                dest.put(str);
+                                dest.put(val);
                                 continue;
                             }
 
@@ -440,6 +258,52 @@ public class Main {
                 } catch (UnsupportedEncodingException e) {
                     throw new RuntimeException("The impossible happened!");
                 }
+            }
+        }
+    }
+
+    /**
+     * Drains numbers from the input queue and writes them to an output
+     * stream.
+     */
+    public static class Drainer implements Runnable {
+        private static final Logger logger = LogManager.getLogger(Drainer.class);
+
+        private final BlockingQueue<Integer> numbers;
+        private final OutputStreamWriter outputStreamWriter;
+        private List<Integer> result;
+
+        public Drainer(BlockingQueue<Integer> numbers, OutputStreamWriter outputStreamWriter) {
+            this.numbers = numbers;
+            this.outputStreamWriter = outputStreamWriter;
+            result = new ArrayList<>(1000);
+        }
+
+        @Override
+        public void run() {
+            while(true) {
+                long startTime = System.currentTimeMillis();
+                numbers.drainTo(result, 1000);
+                if (logger.isDebugEnabled()) {
+                    logger.debug(String.format("Drained %d elements", result.size()));
+                }
+
+                try {
+                    for (Integer i : result) {
+                        if (logger.isDebugEnabled()) {
+                            logger.debug(String.format("Writing %s", i));
+                        }
+                        outputStreamWriter.write(String.format("%09d\n", i));
+                        WRITE_COUNT.mark();
+                    }
+
+                    outputStreamWriter.flush();
+                } catch (IOException e) {
+
+                }
+
+                result.clear();
+                DRAIN_TIMER.update(System.currentTimeMillis() - startTime, TimeUnit.MILLISECONDS);
             }
         }
     }

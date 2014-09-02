@@ -17,9 +17,9 @@ import static org.junit.Assert.fail;
 public class TestDeduper {
 
     private static final Charset UTF8 = Charset.forName("UTF-8");
-    Main.Deduper deduper;
+    Main.DeDuper deDuper;
     BlockingQueue<byte[]> source;
-    BlockingQueue<String> dest;
+    BlockingQueue<Integer> dest;
     AtomicInteger duplicateCounter;
 
     @Before
@@ -27,7 +27,7 @@ public class TestDeduper {
         source = new ArrayBlockingQueue<>(10);
         dest = new ArrayBlockingQueue<>(10);
         duplicateCounter = new AtomicInteger(0);
-        deduper = new Main.Deduper(source, dest, duplicateCounter);
+        deDuper = new Main.DeDuper(source, dest, duplicateCounter);
     }
 
     @Test
@@ -40,13 +40,13 @@ public class TestDeduper {
 
         source.addAll(initialBytes);
         ScheduledExecutorService executorService = Executors.newSingleThreadScheduledExecutor();
-        executorService.submit(deduper);
+        executorService.submit(deDuper);
         Thread.sleep(100);
         executorService.shutdown();
 
         assertEquals("Should have 1 duplicate", 1, duplicateCounter.get());
         assertEquals("Destination queue should only have 3 elements", 3, dest.size());
-        List<String> result = new ArrayList<>();
+        List<Integer> result = new ArrayList<>();
         dest.drainTo(result);
         assertUnique("All list elements should be unique", result);
     }
