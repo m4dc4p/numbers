@@ -14,7 +14,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.fail;
 
-public class DeduperTests {
+public class TestDeduper {
 
     private static final Charset UTF8 = Charset.forName("UTF-8");
     Main.Deduper deduper;
@@ -40,10 +40,8 @@ public class DeduperTests {
 
         source.addAll(initialBytes);
         ScheduledExecutorService executorService = Executors.newSingleThreadScheduledExecutor();
-        Future<?> submit = executorService.scheduleAtFixedRate(deduper, 0, 10, TimeUnit.MILLISECONDS);
-        while(! source.isEmpty()) {
-            Thread.sleep(10);
-        }
+        executorService.submit(deduper);
+        Thread.sleep(100);
         executorService.shutdown();
 
         assertEquals("Should have 1 duplicate", 1, duplicateCounter.get());

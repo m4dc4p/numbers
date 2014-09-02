@@ -14,7 +14,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 import static org.junit.Assert.*;
 
-public class ReaderTests {
+public class TestReader {
     private static final Charset UTF8 = Charset.forName("UTF-8");
     private AtomicInteger receivedCount = new AtomicInteger(0);
     private BlockingQueue<byte[]> store;

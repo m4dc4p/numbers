@@ -39,17 +39,16 @@ public class Main {
     static byte Nine = (byte) '9';
     static byte NewLine = (byte) '\n';
     static byte Tee = (byte) 't';
-    static Object obj = new Object();
 
-    private static MetricRegistry registry = new MetricRegistry();
-    private static Meter RECEIVED_COUNT = registry.meter(name(Main.class, "Received"));
-    private static Meter DUPLICATE_COUNT = registry.meter(name(Main.class, "Duplicate"));
-    private static Meter UNIQUE_COUNT = registry.meter(name(Main.class, "Unique"));
-    private static Meter WRITE_COUNT = registry.meter(name(Main.class, "Written"));
+    private static final MetricRegistry registry = new MetricRegistry();
+    private static final Meter RECEIVED_COUNT = registry.meter(name(Main.class, "Received"));
+    private static final Meter DUPLICATE_COUNT = registry.meter(name(Main.class, "Duplicate"));
+    private static final Meter UNIQUE_COUNT = registry.meter(name(Main.class, "Unique"));
+    private static final Meter WRITE_COUNT = registry.meter(name(Main.class, "Written"));
 
-    private static com.codahale.metrics.Timer DEDUPE_TIMER = registry.timer(name(Main.class, "Deduper"));
-    private static com.codahale.metrics.Timer DRAIN_TIMER = registry.timer(name(Main.class, "Drainer"));
-    private static com.codahale.metrics.Timer READ_TIMER = registry.timer(name(Main.class, "Reader"));
+    private static final Timer DEDUPE_TIMER = registry.timer(name(Main.class, "Deduper"));
+    private static final Timer DRAIN_TIMER = registry.timer(name(Main.class, "Drainer"));
+    private static final Timer READ_TIMER = registry.timer(name(Main.class, "Reader"));
 
     public static void main(String [] args) throws IOException, InterruptedException, ExecutionException {
 

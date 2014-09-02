@@ -30,29 +30,44 @@ public class Main {
         quiet = cmds.hasOption("quiet");
 
         if(cmds.hasOption("help")) {
-            HelpFormatter formatter = new HelpFormatter();
-            formatter.printHelp(Main.class.getCanonicalName(), opts);
-            return;
+            printUsageAndExit(opts);
         }
 
         Client client;
         if(cmds.hasOption("bad")) {
-            Double val = Double.parseDouble(cmds.getOptionValue("val"));
-            client = new BadInputClient(val);
+            if(! cmds.hasOption("val")) {
+                printUsageAndExit(opts, "'val' argument must be present.");
+            }
+            client = new BadInputClient(Double.parseDouble(cmds.getOptionValue("val")));
         }
         else if(cmds.hasOption("steady")) {
-            Integer rate = Integer.parseInt(cmds.getOptionValue("val"));
-            client = new SteadyClient(rate);
+            if(! cmds.hasOption("val")) {
+                printUsageAndExit(opts, "'val' argument must be present.");
+            }
+            client = new SteadyClient(Double.parseDouble(cmds.getOptionValue("val")));
         }
         else if(cmds.hasOption("repeat")) {
-            Integer rate = Integer.parseInt(cmds.getOptionValue("val"));
-            client = new RepeatingClient(rate);
+            if(! cmds.hasOption("val")) {
+                printUsageAndExit(opts, "'val' argument must be present.");
+            }
+            client = new RepeatingClient(Double.parseDouble(cmds.getOptionValue("val")));
         }
         else {
             client = new SpeedClient();
         }
 
         client.go();
+    }
+
+    private static void printUsageAndExit(Options opts, String message) {
+        System.out.println(message);
+        printUsageAndExit(opts);
+    }
+
+    private static void printUsageAndExit(Options opts) {
+        HelpFormatter formatter = new HelpFormatter();
+        formatter.printHelp(Main.class.getCanonicalName(), opts);
+        System.exit(0);
     }
 
     public abstract static class Client {
@@ -95,7 +110,7 @@ public class Main {
          *
          * @param rate In 1000 requests / second.
          */
-        public SteadyClient(int rate) {
+        public SteadyClient(double rate) {
             this.limiter = RateLimiter.create(rate * 1000.0);
         }
 
@@ -112,7 +127,7 @@ public class Main {
          *
          * @param rate In 1000 requests / second.
          */
-        public RepeatingClient(int rate) {
+        public RepeatingClient(double rate) {
             this.limiter = RateLimiter.create(rate * 1000.0);
         }
 
