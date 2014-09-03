@@ -1,0 +1,56 @@
+Numbers
+=======
+
+A server for reading 9-digit numbers from network clients. Makes the following assumptions:
+
+  * Valid input is a 9 digits followed by a newline (0x10). (Sorry
+    Windows). Invalid input causes the client connection to be dropped
+    immediately.
+  * If any client writes `terminate` on an empty line, the server quits
+    immediately.
+
+Assumptions made:
+
+  * Digits are encoded using ASCII/UTF-8.
+  * Clients will generally be well-behaved and long-lived. 
+  * The input given will range over the entire range of 1B numbers.
+
+Building
+========
+
+Use maven to build and test the project:
+
+  mvn install
+
+Note that commands below are given relative to the root of the source
+directory, assuming the jar resides in the `target` directory.
+
+Running the Server
+==================
+
+`mvn install` produces an executable jar. To run the server, using java 7:
+
+  java -jar target/numbers-1.0-SNAPSHOT-shaded.jar
+
+Clients
+=======
+
+Several types of clients can also be run:
+
+  * "steady" client - Sends random numbers at a pre-defined rate (specified in
+    units of 1,000 requests / sec)
+  * "bad" client - Sends bad input some percentage of the time. Immediately
+    reconnects when disconnected from the server.
+  * "repeat" client - Sends the same number (randomly chosen) over and over.
+  * default client - Sends random numbers as fast as possible.
+
+To run the client program, put the `numbers` jar on the class path and execute
+`com.codeslower.numbers.client.Main`:
+
+  java -cp target/numbers-1.0-SNAPSHOT-shaded.jar com.codeslower.numbers.client.Main 
+
+Passing `--help` will give usage information. The server must be running on the
+localhost (at port 4000) for clients to connect.
+
+   
+
