@@ -3,9 +3,10 @@ Numbers
 
 A server for reading 9-digit numbers from network clients. Makes the following assumptions:
 
-  * Valid input is a 9 digits followed by a newline (0x10). (Sorry
-    Windows). Invalid input causes the client connection to be dropped
-    immediately.
+  * Valid input is a 9 digits followed by a newline (as defined by
+    `System.lineSeperator`). Invalid input causes the client connection to be
+    dropped immediately.
+
   * If any client writes `terminate` on an empty line, the server quits
     immediately.
 
@@ -18,7 +19,7 @@ Assumptions made:
 Design 
 ======
 
-I designed my solution around two blocking queues. Three "worker" classes uses
+I designed my solution around two blocking queues. Three "worker" classes use
 those queues to process input, deduplicate numbers given, and write them to the
 output log.
 
@@ -32,21 +33,20 @@ output log.
 The first worker, defined in the `Reader` class, is the only worker
 instantiated multiple times. It reads input from the network, parses it into
 valid sequences of ASCII digits, and puts those bytes into the `toDeDupe`
-queu. If any client gives bad input or disconnects, the worker closes the
+queue. If any client gives bad input or disconnects, the worker closes the
 connection and stops processing. If any client sends the `terminate` command,
 then the worker throws an exception which will ultimately result in the server
 process exiting.
 
 The second worker, defined in the `DeDuper` class, reads input from its queue,
 converts it to an Integer object and checks if the number has been seen
-before. `DeDuper` checks for duplicates by allocating an array of 1B `boolean`
-values (named `seen`) and setting each index when it sees a value the first
-time. Only one instance of `DeDupder` gets instantiated, so the memory consumed
-by `DeDuper` stays constant, and no locking is required to check and update the
-`seen` array. (I tried solutions using various flavors of HashMaps and Sets,
-but they tended to consumer more and more memory over time, even more than the
-1GB used by the array.) `DeDuper` then writes any unique values to an output
-queue.
+before. `DeDuper` checks for duplicates using a BitSet (named `seen`) with 1B
+bits (the maximum value of possible 9-digit numbers). Only one instance of
+`DeDupder` gets instantiated, so the memory consumed by `DeDuper` stays
+constant, and no locking is required to check and update the bit set. (I tried
+solutions using various flavors of HashMaps and Sets, but they tended to
+consumer more and more memory over time.)  `DeDuper` then writes any unique
+values to an output queue.
 
 The third worker, defined in the `Drainer` class, reads input from the
 `numbers` queue (which is filled by `DeDeuper`). `Drainer` writes each Integer
@@ -67,8 +67,8 @@ connect (up to the limit of 5).
 Files
 =====
 
-  * src/main/java/.../service/Main.java -- Contains the Server, Deduplicator
-    and Writer classes.
+  * src/main/java/.../service/Main.java -- Contains the Server, DeDuper
+    and Drainer classes.
   
   * src/main/java/.../service/Reader.java -- This class reads input from the
     network and parses it into numbers (if the input is valid).  

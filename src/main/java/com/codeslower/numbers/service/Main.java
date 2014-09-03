@@ -15,6 +15,7 @@ import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
+import java.util.BitSet;
 import java.util.List;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -52,39 +53,53 @@ public class Main {
         BlockingQueue<Integer> numbers = new ArrayBlockingQueue<>(1_000_000);
         ScheduledExecutorService executor = Executors.newScheduledThreadPool(16);
 
-        try(PrintStream metrics = new PrintStream(createLog("metrics.log"), false, "UTF-8")) {
+        try(PrintStream counters = new PrintStream(createLog("counters.log"), false, "UTF-8");
+            PrintStream timers = new PrintStream(createLog("timers.log"), false, "UTF-8");
+            OutputStreamWriter out = new OutputStreamWriter(createLog("numbers.log"), UTF8)) {
 
-            JmxReporter.forRegistry(registry).build().start();
-            ConsoleReporter.forRegistry(registry)
-                    .convertDurationsTo(TimeUnit.MICROSECONDS)
-                    .convertRatesTo(TimeUnit.MINUTES)
-                    .filter(new MetricFilter() {
-                        @Override
-                        public boolean matches(String s, Metric metric) {
-                            return metric instanceof Meter;
-                        }
-                    })
-                    .outputTo(metrics)
-                    .build()
-                    .start(10, TimeUnit.SECONDS);
+            setupMetrics(counters, timers);
 
-            try (OutputStreamWriter out = new OutputStreamWriter(createLog("numbers.log"), UTF8)) {
-                logger.info("Opened numbers.log");
+            Server server = new Server(toDeDupe, executor, receivedCount);
+            executor.submit(new Drainer(numbers, out));
+            executor.submit(new DeDuper(toDeDupe, numbers, duplicateCount));
+            executor.scheduleWithFixedDelay(new Reporter(System.out, duplicateCount, receivedCount), 10, 10, TimeUnit.SECONDS);
 
-                Server server = new Server(toDeDupe, executor, receivedCount);
-                executor.submit(new Drainer(numbers, out));
-                executor.submit(new DeDuper(toDeDupe, numbers, duplicateCount));
-                executor.scheduleWithFixedDelay(new Reporter(System.out, duplicateCount, receivedCount), 10, 10, TimeUnit.SECONDS);
+            executor.submit(server).get();
 
-                executor.submit(server).get();
-
-            }
-            catch (InterruptedException|ExecutionException e) { }
         }
+        catch (InterruptedException|ExecutionException e) { }
 
         executor.shutdownNow();
         logger.info("Done");
         System.exit(0);
+    }
+
+    private static void setupMetrics(PrintStream counters, PrintStream timers) {
+        JmxReporter.forRegistry(registry).build().start();
+        ConsoleReporter.forRegistry(registry)
+                .convertDurationsTo(TimeUnit.MICROSECONDS)
+                .convertRatesTo(TimeUnit.MINUTES)
+                .filter(new MetricFilter() {
+                    @Override
+                    public boolean matches(String s, Metric metric) {
+                        return metric instanceof Timer;
+                    }
+                })
+                .outputTo(timers)
+                .build()
+                .start(10, TimeUnit.SECONDS);
+        ConsoleReporter.forRegistry(registry)
+                .convertDurationsTo(TimeUnit.MICROSECONDS)
+                .convertRatesTo(TimeUnit.MINUTES)
+                .filter(new MetricFilter() {
+                    @Override
+                    public boolean matches(String s, Metric metric) {
+                        return metric instanceof Meter;
+                    }
+                })
+                .outputTo(counters)
+                .build()
+                .start(10, TimeUnit.SECONDS);
     }
 
     public static class TerminateException extends RuntimeException {
@@ -212,7 +227,7 @@ public class Main {
         private static final int MAX_NUM = 1_000_000_000;
         private static final Logger logger = LogManager.getLogger(DeDuper.class);
 
-        private final boolean[] seen = new boolean[MAX_NUM];
+        private final BitSet seen = new BitSet(MAX_NUM);
         private final BlockingQueue<byte[]> source;
         private final BlockingQueue<Integer> dest;
         private final AtomicInteger duplicateCount;
@@ -236,8 +251,8 @@ public class Main {
                         }
                         for(byte[] b : result) {
                             Integer val = Integer.parseInt(new String(b, "UTF-8"));
-                            if (! seen[val]) {
-                                seen[val] = true;
+                            if (! seen.get(val)) {
+                                seen.set(val, true);
                                 if (logger.isDebugEnabled()) {
                                     logger.debug("Got unique element.");
                                 }

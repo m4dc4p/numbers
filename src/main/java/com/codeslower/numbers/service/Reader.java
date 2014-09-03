@@ -18,6 +18,13 @@ import java.util.concurrent.atomic.AtomicInteger;
  * Handles reading input from the given channel.
  */
 public class Reader implements Runnable {
+    /**
+     * The name of a system property that can be set during testing to
+     * try out different line separators.
+     *
+     * If not set, the system default will be used.
+      */
+    public static final String LINE_SEP_PROPERTY = "numberReaderLineSep";
     private static Logger logger = LogManager.getLogger(Reader.class);
 
     private final ReadableByteChannel channel;
@@ -44,10 +51,10 @@ public class Reader implements Runnable {
     private static class NumberReader {
         private static Logger logger = LogManager.getLogger(NumberReader.class);
 
-        private static byte Zero = (byte) '0';
-        private static byte Nine = (byte) '9';
-        private static byte NewLine = (byte) '\n';
-        private static byte Tee = (byte) 't';
+        private static final byte Zero = (byte) '0';
+        private static final byte Nine = (byte) '9';
+        private final byte [] Newline = System.getProperty(LINE_SEP_PROPERTY, System.lineSeparator()).getBytes();
+        private static final byte Tee = (byte) 't';
         private static final byte [] TERMINATE = "erminate".getBytes(Charset.forName("UTF-8"));
 
         private final ReadableByteChannel channel;
@@ -55,6 +62,7 @@ public class Reader implements Runnable {
         private byte[] remaining = new byte[9];
         private int lastIdx = 0;
         private int cmdIdx = 0;
+        private int nlIdx = 0;
 
         public NumberReader(ReadableByteChannel channel) {
             this.channel = channel;
@@ -104,7 +112,6 @@ public class Reader implements Runnable {
                         if (b >= Zero && b <= Nine) {
                             state = NumberReader.States.NUMBER;
                         } else if (b == Tee) {
-                            cmdIdx = 0;
                             state = NumberReader.States.TERMINATING;
                         } else {
                             close();
@@ -114,7 +121,7 @@ public class Reader implements Runnable {
                         break;
                     case TERMINATING:
                         if (b == TERMINATE[cmdIdx]) {
-                            cmdIdx += 1;
+                            cmdIdx++;
                             if (cmdIdx == TERMINATE.length) {
                                 logger.debug("Throwing TerminateException.");
                                 throw new Main.TerminateException();
@@ -137,19 +144,23 @@ public class Reader implements Runnable {
                         if (lastIdx == 9) {
                             result.add(remaining.clone());
                             state = NumberReader.States.NEWLINE;
-                            cmdIdx = 0;
                             lastIdx = 0;
                         }
 
                         break;
                     case NEWLINE:
-                        if (b != NewLine) {
+                        if(b == Newline[nlIdx]) {
+                            nlIdx++;
+                            if(nlIdx == Newline.length) {
+                                lastIdx = 0;
+                                nlIdx = 0;
+                                state = NumberReader.States.START;
+                            }
+                        }
+                        else {
                             close();
                             break EXIT;
                         }
-
-                        lastIdx = 0;
-                        state = NumberReader.States.START;
                         break;
                 }
             }
