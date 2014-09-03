@@ -13,12 +13,72 @@ Assumptions made:
 
   * Digits are encoded using ASCII/UTF-8.
   * Clients will generally be well-behaved and long-lived. 
-  * The input given will range over the entire range of 1B numbers.
+  * The input given will span the entire range of 1B numbers.
 
+Design 
+======
+
+I designed my solution around two blocking queues. Three "worker" classes uses
+those queues to process input, deduplicate numbers given, and write them to the
+output log.
+
+The first queue (named `toDeDupe` and allocated in `main`) holds arrays of
+bytes read off the network. A single worker reads from this queue, converts the
+bytes to Integers and deduplicates the numbers found. The second queue (named
+`numbers` and also allocated in `main`) takes the unique numbers found by the
+deduper. Another worker reads from `numbers` and writes those values to the
+output log.
+
+The first worker, defined in the `Reader` class, is the only worker
+instantiated multiple times. It reads input from the network, parses it into
+valid sequences of ASCII digits, and puts those bytes into the `toDeDupe`
+queu. If any client gives bad input or disconnects, the worker closes the
+connection and stops processing. If any client sends the `terminate` command,
+then the worker throws an exception which will ultimately result in the server
+process exiting.
+
+The second worker, defined in the `DeDuper` class, reads input from its queue,
+converts it to an Integer object and checks if the number has been seen
+before. `DeDuper` checks for duplicates by allocating an array of 1B `boolean`
+values (named `seen`) and setting each index when it sees a value the first
+time. Only one instance of `DeDupder` gets instantiated, so the memory consumed
+by `DeDuper` stays constant, and no locking is required to check and update the
+`seen` array. (I tried solutions using various flavors of HashMaps and Sets,
+but they tended to consumer more and more memory over time, even more than the
+1GB used by the array.) `DeDuper` then writes any unique values to an output
+queue.
+
+The third worker, defined in the `Drainer` class, reads input from the
+`numbers` queue (which is filled by `DeDeuper`). `Drainer` writes each Integer
+value to the output stream using the specified 9-digit, 0-padded format. Only
+one instance of `Drainer` gets created.
+
+The Server class defines the network server which listens for client
+connections. For each client that connects, the server creates a `Reader`
+instance. However, the server maintains a list of connected clients and will
+only allow 5 connections. Every 100ms, the server checks the known list of
+clients to see if any have disconnected or signaled termination (the
+`pruneClients` method implements this process). If any client signals
+termination, then the server throws an exception that eventually kills the
+process. If a termination signal is not found, then the server removes any
+finished clients from its list of clients, which will allow any new clients to
+connect (up to the limit of 5).
+
+Files
+=====
+
+  * src/main/java/.../service/Main.java -- Contains the Server, Deduplicator
+    and Writer classes.
+  
+  * src/main/java/.../service/Reader.java -- This class reads input from the
+    network and parses it into numbers (if the input is valid).  
+
+  * src/main/java/.../client/Main.java -- Various clients for testing.
+  
 Building
 ========
 
-Use maven to build and test the project:
+Use maven to build and test the project (Java 7 is required):
 
   mvn install
 
@@ -28,7 +88,7 @@ directory, assuming the jar resides in the `target` directory.
 Running the Server
 ==================
 
-`mvn install` produces an executable jar. To run the server, using java 7:
+`mvn install` produces an executable jar. To run the server:
 
   java -jar target/numbers-1.0-SNAPSHOT-shaded.jar
 
@@ -38,7 +98,7 @@ Clients
 Several types of clients can also be run:
 
   * "steady" client - Sends random numbers at a pre-defined rate (specified in
-    units of 1,000 requests / sec)
+    units of 1,000 requests / sec).
   * "bad" client - Sends bad input some percentage of the time. Immediately
     reconnects when disconnected from the server.
   * "repeat" client - Sends the same number (randomly chosen) over and over.
