@@ -1,6 +1,7 @@
 package com.codeslower.numbers.service;
 
 import com.codahale.metrics.*;
+import com.google.common.base.Supplier;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -139,7 +140,7 @@ public class Main {
                         try {
                             clientSelector.selectedKeys().clear();
                             pruneClients();
-                            SocketChannel client = bind.accept();
+                            final SocketChannel client = bind.accept();
 
                             if (clients.size() >= MAX_CLIENTS) {
                                 if (logger.isDebugEnabled()) {
@@ -153,7 +154,16 @@ public class Main {
                             if (logger.isDebugEnabled()) {
                                 logger.debug("Accepted client connection.");
                             }
-                            clients.add(executor.submit(new Reader(client, dest, receivedCount)));
+                            clients.add(executor.submit(new Reader(client, dest, receivedCount, new Supplier<ReadWaiter>() {
+                                @Override
+                                public ReadWaiter get() {
+                                    try {
+                                        return new Reader.SocketWaiter(client);
+                                    } catch (IOException e) {
+                                        throw new RuntimeException(e);
+                                    }
+                                }
+                            })));
                         } catch (IOException e) { }
                     }
                 }

@@ -1,5 +1,6 @@
 package com.codeslower.numbers.service;
 
+import com.google.common.base.Supplier;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -20,6 +21,23 @@ public class TestReader {
     private static final Charset UTF8 = Charset.forName("UTF-8");
     private AtomicInteger receivedCount = new AtomicInteger(0);
     private BlockingQueue<byte[]> store;
+    private ReadWaiter noWaiter = new ReadWaiter() {
+        @Override
+        public void waitToRead() throws IOException {
+            return;
+        }
+
+        @Override
+        public void close() {
+            return;
+        }
+    };
+    private Supplier<ReadWaiter> noWaiterSupplier = new Supplier<ReadWaiter>() {
+        @Override
+        public ReadWaiter get() {
+            return noWaiter;
+        }
+    };
 
     @Before
     public void setUp() throws Exception {
@@ -36,7 +54,7 @@ public class TestReader {
     public void testTerminate() throws Throwable {
         ByteArrayInputStream bs = new ByteArrayInputStream("terminate".getBytes(UTF8));
         ReadableByteChannel readableByteChannel = Channels.newChannel(bs);
-        Reader reader = new Reader(readableByteChannel, store, receivedCount);
+        Reader reader = new Reader(readableByteChannel, store, receivedCount, noWaiterSupplier);
         ScheduledExecutorService executorService = Executors.newSingleThreadScheduledExecutor();
         Future<?> readerResult = executorService.scheduleWithFixedDelay(reader, 0, 10, TimeUnit.MILLISECONDS);
         while(! readerResult.isDone()) {
@@ -57,7 +75,7 @@ public class TestReader {
     public void testReadAndTerminate() throws Throwable {
         ReadableByteChannel readableByteChannel = Channels.newChannel(
                 new ByteArrayInputStream("012345678\nterminate".getBytes(UTF8)));
-        Reader reader = new Reader(readableByteChannel, store, receivedCount);
+        Reader reader = new Reader(readableByteChannel, store, receivedCount, noWaiterSupplier);
         ExecutorService executorService = Executors.newSingleThreadExecutor();
         Future<?> readerResult = executorService.submit(reader);
         while(! readerResult.isDone()) {
@@ -77,7 +95,7 @@ public class TestReader {
     public void testReadAndClose() throws Throwable {
         ReadableByteChannel readableByteChannel = Channels.newChannel(
                 new ByteArrayInputStream("01234\nterminate".getBytes(UTF8)));
-        Reader reader = new Reader(readableByteChannel, store, receivedCount);
+        Reader reader = new Reader(readableByteChannel, store, receivedCount, noWaiterSupplier);
         ExecutorService executorService = Executors.newSingleThreadExecutor();
         Future<?> readerResult = executorService.submit(reader);
         while(! readerResult.isDone()) {
@@ -101,7 +119,7 @@ public class TestReader {
     }
 
     private void verifyBadInput(ReadableByteChannel readableByteChannel) throws InterruptedException {
-        Reader reader = new Reader(readableByteChannel, store, receivedCount);
+        Reader reader = new Reader(readableByteChannel, store, receivedCount, noWaiterSupplier);
         ExecutorService executorService = Executors.newSingleThreadExecutor();
         Future<?> readerResult = executorService.submit(reader);
         while(! readerResult.isDone()) {
@@ -164,7 +182,7 @@ public class TestReader {
 
     private void verifyGoodInput(String newline, List<String> expected, ReadableByteChannel bytes) throws InterruptedException {
         System.setProperty(Reader.LINE_SEP_PROPERTY, newline);
-        Reader reader = new Reader(bytes, store, receivedCount);
+        Reader reader = new Reader(bytes, store, receivedCount, noWaiterSupplier);
 
         ExecutorService executorService = Executors.newSingleThreadExecutor();
         Future<?> readerResult = executorService.submit(reader);

@@ -1,5 +1,6 @@
 package com.codeslower.numbers.service;
 
+import com.google.common.base.Supplier;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
@@ -7,6 +8,9 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.channels.ReadableByteChannel;
+import java.nio.channels.SelectionKey;
+import java.nio.channels.Selector;
+import java.nio.channels.SocketChannel;
 import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.List;
@@ -30,11 +34,13 @@ public class Reader implements Runnable {
     private final ReadableByteChannel channel;
     private final BlockingQueue<byte[]> store;
     private final AtomicInteger receivedCount;
+    private final Supplier<ReadWaiter> waiterSupplier;
 
-    public Reader(ReadableByteChannel channel, BlockingQueue<byte[]> store, AtomicInteger receivedCount) {
+    public Reader(ReadableByteChannel channel, BlockingQueue<byte[]> store, AtomicInteger receivedCount, Supplier<ReadWaiter> waiterSupplier) {
         this.channel = channel;
         this.store = store;
         this.receivedCount = receivedCount;
+        this.waiterSupplier = waiterSupplier;
     }
 
     /**
@@ -179,14 +185,41 @@ public class Reader implements Runnable {
         }
     }
 
+    public static class SocketWaiter implements ReadWaiter {
+        private final Selector selector;
+        private final SocketChannel channel;
+
+        public SocketWaiter(SocketChannel channel) throws IOException {
+            this.channel = channel;
+            selector = Selector.open();
+        }
+
+        @Override
+        public void waitToRead() throws IOException {
+            channel.register(selector, SelectionKey.OP_READ);
+            selector.select();
+            selector.selectedKeys().clear();
+        }
+
+        @Override
+        public void close()  {
+            try {
+                selector.close();
+            } catch (IOException e) {
+
+            }
+        }
+    }
+
     @Override
     public void run() {
         ByteBuffer buffer = ByteBuffer.allocate(1000);
         buffer.order(ByteOrder.nativeOrder());
         NumberReader reader = new NumberReader(channel);
-        while(true) {
-            buffer.clear();
-            try {
+        try (ReadWaiter waiter = waiterSupplier.get()) {
+            while(true) {
+                buffer.clear();
+                waiter.waitToRead();
                 int bytesRead = channel.read(buffer);
                 if (bytesRead > 0) {
                     long startTime = System.currentTimeMillis();
@@ -208,11 +241,11 @@ public class Reader implements Runnable {
                 else if(bytesRead < 0) {
                     return;
                 }
-            } catch (IOException e) {
-                break;
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
             }
+        } catch (IOException e) {
+
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
     }
 }
