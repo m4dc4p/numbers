@@ -92,6 +92,21 @@ Running the Server
 
   java -jar target/numbers-1.0-SNAPSHOT-shaded.jar
 
+While the server runs, it produces three output files:
+
+  * numbers.log -- Contains the list of unique numbers received so far.
+
+  * timers.log -- A running report on various timers inserted in the code.
+
+  * counters.log -- A running report showing various counters. They include:
+
+    * Received -- Count of numbers received (including
+      duplicates)
+
+    * Duplicate -- The count of duplicate numbers seen.
+
+    * Unique -- Count of unique numbers seen.
+
 Clients
 =======
 

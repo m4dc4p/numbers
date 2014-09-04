@@ -58,7 +58,7 @@ public class Reader implements Runnable {
         private static final byte [] TERMINATE = "erminate".getBytes(Charset.forName("UTF-8"));
 
         private final ReadableByteChannel channel;
-        private NumberReader.States state = NumberReader.States.START;
+        private States state = States.START;
         private byte[] remaining = new byte[9];
         private int lastIdx = 0;
         private int cmdIdx = 0;
@@ -110,9 +110,9 @@ public class Reader implements Runnable {
                         lastIdx++;
 
                         if (b >= Zero && b <= Nine) {
-                            state = NumberReader.States.NUMBER;
+                            state = States.NUMBER;
                         } else if (b == Tee) {
-                            state = NumberReader.States.TERMINATING;
+                            state = States.TERMINATING;
                         } else {
                             close();
                             break EXIT;
@@ -143,7 +143,7 @@ public class Reader implements Runnable {
 
                         if (lastIdx == 9) {
                             result.add(remaining.clone());
-                            state = NumberReader.States.NEWLINE;
+                            state = States.NEWLINE;
                             lastIdx = 0;
                         }
 
@@ -154,7 +154,7 @@ public class Reader implements Runnable {
                             if(nlIdx == Newline.length) {
                                 lastIdx = 0;
                                 nlIdx = 0;
-                                state = NumberReader.States.START;
+                                state = States.START;
                             }
                         }
                         else {
@@ -185,12 +185,12 @@ public class Reader implements Runnable {
         buffer.order(ByteOrder.nativeOrder());
         NumberReader reader = new NumberReader(channel);
         while(true) {
-            long startTime = System.currentTimeMillis();
             buffer.clear();
             try {
-
                 int bytesRead = channel.read(buffer);
                 if (bytesRead > 0) {
+                    long startTime = System.currentTimeMillis();
+
                     List<byte[]> result = reader.readBuffer(buffer);
                     if (result.size() > 0) {
                         if (logger.isDebugEnabled()) {
@@ -202,12 +202,12 @@ public class Reader implements Runnable {
                         Main.RECEIVED_COUNT.mark(result.size());
                         receivedCount.addAndGet(result.size());
                     }
+
+                    Main.READ_TIMER.update(System.currentTimeMillis() - startTime, TimeUnit.MILLISECONDS);
                 }
                 else if(bytesRead < 0) {
                     return;
                 }
-
-                Main.READ_TIMER.update(System.currentTimeMillis() - startTime, TimeUnit.MILLISECONDS);
             } catch (IOException e) {
                 break;
             } catch (InterruptedException e) {

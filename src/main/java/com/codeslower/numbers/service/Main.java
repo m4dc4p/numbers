@@ -59,12 +59,11 @@ public class Main {
 
             setupMetrics(counters, timers);
 
-            Server server = new Server(toDeDupe, executor, receivedCount);
             executor.submit(new Drainer(numbers, out));
             executor.submit(new DeDuper(toDeDupe, numbers, duplicateCount));
             executor.scheduleWithFixedDelay(new Reporter(System.out, duplicateCount, receivedCount), 10, 10, TimeUnit.SECONDS);
 
-            executor.submit(server).get();
+            executor.submit(new Server(toDeDupe, executor, receivedCount)).get();
 
         }
         catch (InterruptedException|ExecutionException e) { }
@@ -242,13 +241,17 @@ public class Main {
         public void run() {
             List<byte[]> result = new ArrayList<>(1000);
             while(true) {
-                long starTime = System.currentTimeMillis();
                 try {
-                    int cnt = source.drainTo(result, 1000);
-                    if(cnt > 0) {
+                    byte [] first = source.take();
+
+                    if(first != null) {
+                        long starTime = System.currentTimeMillis();
+                        result.add(first);
+                        source.drainTo(result, 999);
                         if(logger.isDebugEnabled()) {
                             logger.debug("Got some bytes.");
                         }
+
                         for(byte[] b : result) {
                             Integer val = Integer.parseInt(new String(b, "UTF-8"));
                             if (! seen.get(val)) {
@@ -265,8 +268,8 @@ public class Main {
                             duplicateCount.incrementAndGet();
                         }
 
-                        DEDUPE_TIMER.update(System.currentTimeMillis() - starTime, TimeUnit.MILLISECONDS);
                         result.clear();
+                        DEDUPE_TIMER.update(System.currentTimeMillis() - starTime, TimeUnit.MILLISECONDS);
                     }
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
@@ -286,39 +289,46 @@ public class Main {
 
         private final BlockingQueue<Integer> numbers;
         private final OutputStreamWriter outputStreamWriter;
-        private List<Integer> result;
 
         public Drainer(BlockingQueue<Integer> numbers, OutputStreamWriter outputStreamWriter) {
             this.numbers = numbers;
             this.outputStreamWriter = outputStreamWriter;
-            result = new ArrayList<>(1000);
         }
 
         @Override
         public void run() {
+            List<Integer> result = new ArrayList<>(1000);
             while(true) {
-                long startTime = System.currentTimeMillis();
-                numbers.drainTo(result, 1000);
-                if (logger.isDebugEnabled()) {
-                    logger.debug(String.format("Drained %d elements", result.size()));
-                }
-
                 try {
-                    for (Integer i : result) {
-                        if (logger.isDebugEnabled()) {
-                            logger.debug(String.format("Writing %s", i));
-                        }
-                        outputStreamWriter.write(String.format("%09d\n", i));
-                        WRITE_COUNT.mark();
-                    }
+                    Integer first = numbers.take();
 
-                    outputStreamWriter.flush();
+                    if (first != null) {
+                        long startTime = System.currentTimeMillis();
+                        result.add(first);
+                        numbers.drainTo(result, 999);
+                        if (logger.isDebugEnabled()) {
+                            logger.debug(String.format("Drained %d elements", result.size()));
+                        }
+
+                        for (Integer i : result) {
+                            if (logger.isDebugEnabled()) {
+                                logger.debug(String.format("Writing %s", i));
+                            }
+                            outputStreamWriter.write(String.format("%09d\n", i));
+                            WRITE_COUNT.mark();
+                        }
+
+                        outputStreamWriter.flush();
+                        result.clear();
+
+                        DRAIN_TIMER.update(System.currentTimeMillis() - startTime, TimeUnit.MILLISECONDS);
+                    }
+                }
+                catch(InterruptedException e) {
+                    Thread.currentThread().interrupt();
                 } catch (IOException e) {
 
                 }
-
-                result.clear();
-                DRAIN_TIMER.update(System.currentTimeMillis() - startTime, TimeUnit.MILLISECONDS);
             }
         }
     }
